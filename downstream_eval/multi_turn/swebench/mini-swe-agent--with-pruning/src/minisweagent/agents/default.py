@@ -23,6 +23,22 @@ def _resolve_env_placeholders(value: Any):
 
 from minisweagent.utils.log import logger
 
+
+def _classify_shell_action(action_text: str) -> str:
+    text = action_text.strip()
+    if "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT" in text or "MINI_SWE_AGENT_FINAL_OUTPUT" in text:
+        return "submit"
+    if re.search(r"\b(pytest|tox|unittest|npm\s+test|pnpm\s+test|yarn\s+test|cargo\s+test|go\s+test)\b", text):
+        return "test"
+    if re.search(r"(apply_patch|sed\s+-i|cat\s+<<.*>|>\s*[\w./-]+|python\s+- <<)", text, re.DOTALL):
+        return "write"
+    if re.search(r"\b(rg|grep|find|ag)\b", text):
+        return "search"
+    if re.search(r"\b(cat|sed\s+-n|nl\s+-ba|head|tail|less)\b", text):
+        return "read"
+    return "other"
+
+
 @dataclass
 class AgentConfig:
     # The default settings are the bare minimum to run the agent. Take a look at the config files for improved settings.
@@ -221,6 +237,9 @@ class DefaultAgent:
             threshold=self.pruner_client.config.threshold,
             always_keep_first_frags=False,
             chunk_overlap_tokens=self.pruner_client.config.chunk_overlap_tokens,
+            selection_mode=self.pruner_client.config.selection_mode,
+            operation_type=_classify_shell_action(action["action"]),
+            action_text=action["action"],
         )
         pruned_result: PruneResponse = self.pruner_client.prune(req)
         if pruned_result.error_msg:

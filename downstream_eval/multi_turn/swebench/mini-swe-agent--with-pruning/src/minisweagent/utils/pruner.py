@@ -17,6 +17,7 @@ class PrunerConfig(BaseModel):
     min_chars: int = 0
     headers: dict[str, str] = Field(default_factory=dict)
     chunk_overlap_tokens: int = 50
+    selection_mode: str = "line"
 
     class Config:
         extra = "allow"
@@ -28,6 +29,9 @@ class PrunerRequest(BaseModel):
     threshold: float
     always_keep_first_frags: bool = False
     chunk_overlap_tokens: int = 50
+    selection_mode: str = "line"
+    operation_type: str | None = None
+    action_text: str | None = None
 
 
 class PruneResponse(BaseModel):

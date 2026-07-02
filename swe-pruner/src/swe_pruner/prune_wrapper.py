@@ -13,6 +13,9 @@ class PruneRequest(BaseModel):
     threshold: float = 0.5
     always_keep_first_frags: bool = False
     chunk_overlap_tokens: int = 50
+    selection_mode: str = "line"
+    operation_type: Optional[str] = None
+    action_text: Optional[str] = None
 
 
 class PruneResponse(BaseModel):
@@ -24,6 +27,153 @@ class PruneResponse(BaseModel):
     left_token_cnt: int
     model_input_token_cnt: int
     error_msg: Optional[str] = None
+
+
+SPAN_PROTECTED_OPERATION_TYPES = {"write", "edit", "test", "submit"}
+
+
+def _line_mode_seed_lines(
+    line_count: int,
+    line_scores: Dict[int, float],
+    threshold: float,
+    always_keep_first_frags: bool = False,
+) -> List[int]:
+    kept_lines = []
+    num_first_frags = 1 if always_keep_first_frags else 0
+    for line_num in range(1, line_count + 1):
+        if line_num <= num_first_frags:
+            kept_lines.append(line_num)
+        elif line_scores.get(line_num, 0.0) >= threshold:
+            kept_lines.append(line_num)
+    return kept_lines
+
+
+def _format_kept_lines(code: str, kept_lines: List[int]) -> str:
+    lines = code.splitlines()
+    kept_set = set(kept_lines)
+    kept_code_lines = []
+    filtered_lines_cnt = 0
+    filtered_char_cnt = 0
+    s_format = "(filtered {} lines)"
+
+    for line in range(1, len(lines) + 1):
+        if lines[line - 1].strip() == "":
+            filtered_lines_cnt += 1
+            continue
+        if line not in kept_set:
+            filtered_lines_cnt += 1
+            filtered_char_cnt += len(lines[line - 1])
+        else:
+            if filtered_lines_cnt > 0:
+                baseline_length = len(s_format.format(0))
+                if filtered_char_cnt > baseline_length:
+                    kept_code_lines.append(s_format.format(filtered_lines_cnt))
+                else:
+                    for j in range(filtered_lines_cnt, 0, -1):
+                        kept_code_lines.append(lines[line - j - 1])
+                filtered_lines_cnt = 0
+                filtered_char_cnt = 0
+            kept_code_lines.append(lines[line - 1])
+    if filtered_lines_cnt > 0:
+        kept_code_lines.append(s_format.format(filtered_lines_cnt))
+    return "\n".join(kept_code_lines)
+
+
+def _merge_ranges(ranges: List[Tuple[int, int]], gap: int = 1) -> List[Tuple[int, int]]:
+    if not ranges:
+        return []
+    ranges = sorted(ranges)
+    merged = [ranges[0]]
+    for start, end in ranges[1:]:
+        prev_start, prev_end = merged[-1]
+        if start <= prev_end + gap + 1:
+            merged[-1] = (prev_start, max(prev_end, end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def _expand_span_to_budget(
+    start: int,
+    end: int,
+    line_count: int,
+    budget_remaining: int,
+    target_width: int,
+) -> Tuple[int, int, int]:
+    if budget_remaining <= 0:
+        return start, end, 0
+    current_width = end - start + 1
+    need = max(0, target_width - current_width)
+    take = min(need, budget_remaining)
+    left_take = min(start - 1, take // 2)
+    right_take = min(line_count - end, take - left_take)
+    extra_left = min(start - 1 - left_take, take - left_take - right_take)
+    left_take += extra_left
+    return start - left_take, end + right_take, left_take + right_take
+
+
+def prune_code_spans(
+    code: str,
+    line_scores: Dict[int, float],
+    threshold: float,
+    always_keep_first_frags: bool = False,
+    operation_type: Optional[str] = None,
+) -> Tuple[str, List[int]]:
+    """Prune by returning contiguous line ranges rather than isolated lines."""
+    lines = code.splitlines()
+    line_count = len(lines)
+    if line_count == 0:
+        return code, []
+
+    seed_lines = _line_mode_seed_lines(
+        line_count,
+        line_scores,
+        threshold,
+        always_keep_first_frags=always_keep_first_frags,
+    )
+    if not seed_lines:
+        return prune_code_lines(
+            code,
+            line_scores,
+            threshold,
+            always_keep_first_frags=always_keep_first_frags,
+        )
+
+    op = (operation_type or "read").lower()
+    min_width_by_op = {
+        "search": 7,
+        "read": 5,
+        "traceback": 5,
+        "other": 3,
+    }
+    target_width = min_width_by_op.get(op, 5)
+
+    seed_ranges = _merge_ranges([(line_num, line_num) for line_num in seed_lines], gap=1)
+    seed_count = len(set(seed_lines))
+    max_extra = max(2, int(seed_count * 0.35))
+    budget_remaining = max_extra
+
+    expanded_ranges = []
+    for start, end in seed_ranges:
+        start, end, used = _expand_span_to_budget(
+            start,
+            end,
+            line_count,
+            budget_remaining,
+            target_width,
+        )
+        budget_remaining -= used
+        expanded_ranges.append((start, end))
+
+    merged_ranges = _merge_ranges(expanded_ranges, gap=1)
+    kept_lines = sorted(
+        {
+            line_num
+            for start, end in merged_ranges
+            for line_num in range(max(1, start), min(line_count, end) + 1)
+        }
+    )
+    return _format_kept_lines(code, kept_lines), kept_lines
 
 
 def format_instruction(instruction: Optional[str], query: str) -> str:
@@ -540,6 +690,22 @@ class SwePrunerForCodePruning(SwePrunerForCodeCompression):
         prefix_tokens = self.tokenizer.encode(prefix, add_special_tokens=False)
         suffix_tokens = self.tokenizer.encode(suffix, add_special_tokens=False)
 
+        selection_mode = (request.selection_mode or "line").lower()
+        operation_type = (request.operation_type or "read").lower()
+        if selection_mode == "span" and operation_type in SPAN_PROTECTED_OPERATION_TYPES:
+            return PruneResponse(
+                score=1.0,
+                pruned_code=request.code,
+                token_scores=[],
+                kept_frags=list(range(1, len(request.code.splitlines()) + 1)),
+                origin_token_cnt=code_tokens,
+                left_token_cnt=code_tokens,
+                model_input_token_cnt=query_tokens
+                + code_tokens
+                + len(prefix_tokens)
+                + len(suffix_tokens),
+            )
+
         available_length = max_length - len(prefix_tokens) - len(suffix_tokens)
         code_max_tokens = available_length - query_tokens
 
@@ -619,12 +785,21 @@ class SwePrunerForCodePruning(SwePrunerForCodeCompression):
             code_token_scores,
             code_token_offsets,
         )
-        pruned_code, kept_frags = prune_code_lines(
-            request.code,
-            line_scores,
-            request.threshold,
-            request.always_keep_first_frags,
-        )
+        if selection_mode == "span":
+            pruned_code, kept_frags = prune_code_spans(
+                request.code,
+                line_scores,
+                request.threshold,
+                request.always_keep_first_frags,
+                operation_type=operation_type,
+            )
+        else:
+            pruned_code, kept_frags = prune_code_lines(
+                request.code,
+                line_scores,
+                request.threshold,
+                request.always_keep_first_frags,
+            )
         # Format token_scores for response
         token_scores_response = [[token, score] for token, score in code_token_scores]
 

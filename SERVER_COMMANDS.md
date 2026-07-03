@@ -44,6 +44,14 @@ cd "${PROJECT_ROOT}"
 
 ## 2. Bootstrap environments and model paths
 
+Run bootstrap from a clean shell when possible. If conda or another uv environment is active, deactivate it first:
+
+```bash
+conda deactivate || true
+deactivate 2>/dev/null || true
+unset VIRTUAL_ENV PYTHONHOME PYTHONPATH
+```
+
 ```bash
 bash scripts/bootstrap_span_swepruner.sh
 ```
@@ -53,6 +61,13 @@ Optional switches:
 ```bash
 DOWNLOAD_MODELS=0 bash scripts/bootstrap_span_swepruner.sh
 INSTALL_TRAIN_ENV=0 INSTALL_MINI_ENV=0 bash scripts/bootstrap_span_swepruner.sh
+```
+
+If `flash-attn` fails because the build environment is missing `wheel`, repair the partially-created environments and resume bootstrap:
+
+```bash
+bash scripts/repair_flash_attn.sh
+INSTALL_PRUNER_ENV=0 INSTALL_TRAIN_ENV=0 bash scripts/bootstrap_span_swepruner.sh
 ```
 
 ## 3. Smoke test span pruning only

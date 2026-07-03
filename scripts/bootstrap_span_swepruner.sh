@@ -32,6 +32,7 @@ BASE_MODEL_REPO="${BASE_MODEL_REPO:-Qwen/Qwen3-Reranker-0.6B}"
 BASE_MODEL_DIR="${BASE_MODEL_DIR:-${MODELS_DIR}/Qwen3-Reranker-0.6B}"
 
 export HF_ENDPOINT HF_HOME HUGGINGFACE_HUB_CACHE TRANSFORMERS_CACHE
+unset PYTHONHOME PYTHONPATH
 
 install_uv() {
   if command -v uv >/dev/null 2>&1; then
@@ -56,6 +57,7 @@ if [[ "${INSTALL_PRUNER_ENV}" == "1" ]]; then
   uv venv --python 3.12 "${PRUNER_ENV}"
   uv pip install --python "${PRUNER_ENV}/bin/python" torch torchvision --index-url https://download.pytorch.org/whl/cu126
   uv pip install --python "${PRUNER_ENV}/bin/python" -e "${PROJECT_ROOT}/swe-pruner"
+  uv pip install --python "${PRUNER_ENV}/bin/python" wheel packaging ninja
   if [[ "${INSTALL_FLASH_ATTN}" == "1" ]]; then
     uv pip install --python "${PRUNER_ENV}/bin/python" flash-attn --no-build-isolation || true
   fi
@@ -64,7 +66,10 @@ fi
 if [[ "${INSTALL_TRAIN_ENV}" == "1" ]]; then
   uv venv --python 3.12 "${TRAIN_ENV}"
   uv pip install --python "${TRAIN_ENV}/bin/python" torch torchvision --index-url https://download.pytorch.org/whl/cu126
-  uv pip install --python "${TRAIN_ENV}/bin/python" transformers flash-attn torchmetrics typer rich pydantic tqdm tensorboard --no-build-isolation
+  uv pip install --python "${TRAIN_ENV}/bin/python" transformers torchmetrics typer rich pydantic tqdm tensorboard wheel packaging ninja
+  if [[ "${INSTALL_FLASH_ATTN}" == "1" ]]; then
+    uv pip install --python "${TRAIN_ENV}/bin/python" flash-attn --no-build-isolation
+  fi
 fi
 
 if [[ "${INSTALL_MINI_ENV}" == "1" ]]; then

@@ -98,6 +98,18 @@ If you already have an official or custom JSONL file, standardize it with:
 SOURCE_JSONL=/path/to/source.jsonl bash scripts/prepare_training_data.sh
 ```
 
+To download the official 61k Python SWE-Pruner training dataset from Google Drive:
+
+```bash
+bash scripts/download_official_training_data.sh
+```
+
+It writes to:
+
+```text
+/home/yuantao/futao/span_swepruner/data/swe-pruner-training-dataset-py.jsonl
+```
+
 If you collected mini-SWE-agent trajectories with pruner stats, build agent-native data and use it for training:
 
 ```bash

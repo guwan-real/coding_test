@@ -159,6 +159,12 @@ python -m train.inference.build_label \
 - **`--num-fusion-layers`** – Self-attention fusion layers (default: 1).
 - **`--num-heads`** – Attention heads per fusion layer (default: 8).
 
+### Span-aware labels
+- **`--label-mode`** – `line` keeps original sparse line labels; `span` merges kept lines into contiguous line ranges before token labeling.
+- **`--span-merge-gap`** – Merge kept lines separated by at most this many non-kept lines when `--label-mode span`.
+- **`--span-context-lines`** – Expand each span by this many neighboring lines.
+- **`--span-smooth-loss-weight`** – Add a score smoothness regularizer inside same-label regions to reduce line-level jitter.
+
 ### Loss
 - **`--lambda-score`** – Score loss weight; compression weight = 1 − lambda (default: 0.05).
 - **`--compression-loss-type`** – `bce` | `focal` (default: `focal`).

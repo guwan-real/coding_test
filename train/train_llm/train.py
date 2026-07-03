@@ -676,6 +676,9 @@ def kept_frags_to_label(
     kept_frags: List[int],
     code: str,
     tokenizer: AutoTokenizer,
+    label_mode: str = "line",
+    span_merge_gap: int = 0,
+    span_context_lines: int = 0,
 ) -> torch.Tensor:
     """
     kept_frags : 1-based line numbers to KEEP (mask=1), others mask=0
@@ -686,10 +689,30 @@ def kept_frags_to_label(
     lines = code.splitlines(keepends=True)
     keep_char_spans = []
     char_cnt = 0
-    for idx, line in enumerate(lines, 1):
-        if idx in kept_frags:
-            keep_char_spans.append((char_cnt, char_cnt + len(line)))
+    line_char_spans = []
+    for line in lines:
+        line_char_spans.append((char_cnt, char_cnt + len(line)))
         char_cnt += len(line)
+
+    kept_lines = sorted({line for line in kept_frags if 1 <= line <= len(lines)})
+    if label_mode == "span":
+        keep_line_spans = kept_lines_to_spans(
+            kept_lines,
+            num_lines=len(lines),
+            merge_gap=span_merge_gap,
+            context_lines=span_context_lines,
+        )
+        for start_line, end_line in keep_line_spans:
+            start_char = line_char_spans[start_line - 1][0]
+            end_char = line_char_spans[end_line - 1][1]
+            keep_char_spans.append((start_char, end_char))
+    elif label_mode == "line":
+        kept_set = set(kept_lines)
+        for idx, (start_char, end_char) in enumerate(line_char_spans, 1):
+            if idx in kept_set:
+                keep_char_spans.append((start_char, end_char))
+    else:
+        raise ValueError(f"Unknown label_mode: {label_mode}")
 
     # 2. tokenize code（不加特殊token，因为会在pair encoding时统一处理）
     enc = tokenizer(code, add_special_tokens=False, return_offsets_mapping=True)
@@ -708,6 +731,46 @@ def kept_frags_to_label(
     return mask
 
 
+def kept_lines_to_spans(
+    kept_lines: List[int],
+    num_lines: int,
+    merge_gap: int = 0,
+    context_lines: int = 0,
+) -> List[Tuple[int, int]]:
+    """Convert sparse 1-based kept lines into expanded contiguous line spans."""
+    if not kept_lines or num_lines <= 0:
+        return []
+
+    merge_gap = max(0, merge_gap)
+    context_lines = max(0, context_lines)
+    sorted_lines = sorted({line for line in kept_lines if 1 <= line <= num_lines})
+    if not sorted_lines:
+        return []
+
+    spans = []
+    start = prev = sorted_lines[0]
+    for line in sorted_lines[1:]:
+        if line - prev - 1 <= merge_gap:
+            prev = line
+            continue
+        spans.append((start, prev))
+        start = prev = line
+    spans.append((start, prev))
+
+    expanded = [
+        (max(1, start - context_lines), min(num_lines, end + context_lines))
+        for start, end in spans
+    ]
+
+    merged = []
+    for start, end in expanded:
+        if not merged or start > merged[-1][1] + 1:
+            merged.append([start, end])
+        else:
+            merged[-1][1] = max(merged[-1][1], end)
+    return [(start, end) for start, end in merged]
+
+
 class CodePruneDataset(Dataset):
     def __init__(
         self,
@@ -716,11 +779,17 @@ class CodePruneDataset(Dataset):
         max_length: int = 8192,
         instruction: str = None,
         compute_class_ratio: bool = True,
+        label_mode: str = "line",
+        span_merge_gap: int = 0,
+        span_context_lines: int = 0,
     ):
         self.data = data
         self.tokenizer = tokenizer
         self.max_length = max_length
         self.instruction = instruction
+        self.label_mode = label_mode
+        self.span_merge_gap = span_merge_gap
+        self.span_context_lines = span_context_lines
 
         self.pos_ratio = None
         self.neg_ratio = None
@@ -767,6 +836,9 @@ class CodePruneDataset(Dataset):
                 item.kept_frags,
                 code=item.code,
                 tokenizer=self.tokenizer,
+                label_mode=self.label_mode,
+                span_merge_gap=self.span_merge_gap,
+                span_context_lines=self.span_context_lines,
             )
             total_pos_tokens += code_mask.sum().item()
             total_tokens += code_mask.numel()
@@ -774,9 +846,9 @@ class CodePruneDataset(Dataset):
         if total_tokens > 0:
             self.pos_ratio = total_pos_tokens / total_tokens
             self.neg_ratio = 1 - self.pos_ratio
-            # alpha设置为正类的比例（这样负类会获得1-alpha的权重，负类多时权重小）
-            # 或者使用1 - pos_ratio让少数类获得更大权重
-            self.auto_focal_alpha = self.pos_ratio  # 少数类（正类）获得更大权重
+            # Focal alpha is the positive-class weight; use 1 - pos_ratio so
+            # sparse keep labels receive a larger weight than abundant drops.
+            self.auto_focal_alpha = 1.0 - self.pos_ratio
 
             console.print(
                 f"Class statistics computed from {len(sample_indices)} samples:"
@@ -858,6 +930,9 @@ class CodePruneDataset(Dataset):
             item.kept_frags,
             code=item.code,
             tokenizer=self.tokenizer,
+            label_mode=self.label_mode,
+            span_merge_gap=self.span_merge_gap,
+            span_context_lines=self.span_context_lines,
         )
         code_mask = code_mask[:code_len]
         token_labels = torch.full((self.max_length,), -100, dtype=torch.long)
@@ -881,6 +956,7 @@ def compute_combined_loss(
     focal_alpha: float = 0.25,
     focal_gamma: float = 2.0,
     use_sample_level_aggregation: bool = True,
+    span_smooth_loss_weight: float = 0.0,
 ) -> Tuple[torch.Tensor, Dict[str, float]]:
     """
     计算组合损失：压缩损失 * (1 - lambda) + 得分损失 * lambda
@@ -915,6 +991,7 @@ def compute_combined_loss(
     # 计算压缩损失
     valid_mask = doc_mask & attention_mask.bool() & (token_labels != -100)
     compress_loss = torch.tensor(0.0, device=device)
+    span_smooth_loss = torch.tensor(0.0, device=device)
     pos_rate = 0.0
 
     if valid_mask.sum() > 0:
@@ -1038,6 +1115,14 @@ def compute_combined_loss(
 
             pos_rate = float(labels_valid.mean().detach().cpu().item())
 
+        if span_smooth_loss_weight > 0:
+            span_smooth_loss = compute_label_consistency_smoothness_loss(
+                token_logits=token_logits,
+                token_labels=token_labels,
+                valid_mask=valid_mask,
+            )
+            compress_loss = compress_loss + span_smooth_loss_weight * span_smooth_loss
+
     # Score loss: score_logits are log probs (yes), convert to probability
     score_probs = torch.exp(score_logits)
 
@@ -1050,9 +1135,39 @@ def compute_combined_loss(
         "total_loss": float(total_loss.detach().cpu().item()),
         "compress_loss": float(compress_loss.detach().cpu().item()),
         "score_loss": float(score_loss.detach().cpu().item()),
+        "span_smooth_loss": float(span_smooth_loss.detach().cpu().item()),
         "pos_rate": pos_rate,
     }
     return total_loss, logs
+
+
+def compute_label_consistency_smoothness_loss(
+    token_logits: torch.Tensor,
+    token_labels: torch.Tensor,
+    valid_mask: torch.Tensor,
+) -> torch.Tensor:
+    """Penalize adjacent score jitter inside same-label regions."""
+    smooth_losses = []
+    batch_size = token_logits.size(0)
+
+    for i in range(batch_size):
+        positions = valid_mask[i].nonzero(as_tuple=True)[0]
+        if positions.numel() < 2:
+            continue
+
+        sample_logits = token_logits[i, positions]
+        sample_labels = token_labels[i, positions]
+        same_label = sample_labels[1:] == sample_labels[:-1]
+        if same_label.sum() == 0:
+            continue
+
+        probs = torch.sigmoid(sample_logits.float())
+        diffs = probs[1:] - probs[:-1]
+        smooth_losses.append((diffs[same_label] ** 2).mean())
+
+    if not smooth_losses:
+        return torch.tensor(0.0, device=token_logits.device)
+    return torch.stack(smooth_losses).mean()
 
 
 def collate_fn(batch):
@@ -1082,6 +1197,7 @@ def evaluate(
     compression_loss_type: str = "bce",
     focal_alpha: float = 0.25,
     focal_gamma: float = 2.0,
+    span_smooth_loss_weight: float = 0.0,
 ) -> Dict[str, Any]:
     """Evaluate model and return metrics using torchmetrics for DDP compatibility
 
@@ -1111,6 +1227,7 @@ def evaluate(
     total_loss = 0.0
     total_compress_loss = 0.0
     total_score_loss = 0.0
+    total_span_smooth_loss = 0.0
     num_samples = 0
 
     with torch.no_grad():
@@ -1125,11 +1242,13 @@ def evaluate(
                     compression_loss_type=compression_loss_type,
                     focal_alpha=focal_alpha,
                     focal_gamma=focal_gamma,
+                    span_smooth_loss_weight=span_smooth_loss_weight,
                 )
 
             total_loss += logs["total_loss"]
             total_compress_loss += logs["compress_loss"]
             total_score_loss += logs["score_loss"]
+            total_span_smooth_loss += logs["span_smooth_loss"]
             num_samples += 1
 
             # For compression metrics, extract token logits
@@ -1166,6 +1285,7 @@ def evaluate(
     avg_loss = total_loss / max(num_samples, 1)
     avg_compress_loss = total_compress_loss / max(num_samples, 1)
     avg_score_loss = total_score_loss / max(num_samples, 1)
+    avg_span_smooth_loss = total_span_smooth_loss / max(num_samples, 1)
     accuracy = accuracy_metric.compute().item()
     f1 = f1_metric.compute().item()
     precision = precision_metric.compute().item()
@@ -1186,6 +1306,7 @@ def evaluate(
         "loss": avg_loss,
         "compress_loss": avg_compress_loss,
         "score_loss": avg_score_loss,
+        "span_smooth_loss": avg_span_smooth_loss,
         "accuracy": accuracy,
         "f1": f1,
         "precision": precision,
@@ -1405,6 +1526,7 @@ def train_epoch(
     focal_alpha: float = 0.25,
     focal_gamma: float = 2.0,
     use_sample_level_aggregation: bool = True,
+    span_smooth_loss_weight: float = 0.0,
 ) -> int:
     """Train for one epoch"""
     model.train()
@@ -1428,6 +1550,7 @@ def train_epoch(
             focal_alpha=focal_alpha,
             focal_gamma=focal_gamma,
             use_sample_level_aggregation=use_sample_level_aggregation,
+            span_smooth_loss_weight=span_smooth_loss_weight,
         )
 
         batch_loss.backward()
@@ -1443,6 +1566,11 @@ def train_epoch(
                 "train/compress_loss_step", logs["compress_loss"], global_step
             )
             writer.add_scalar("train/score_loss_step", logs["score_loss"], global_step)
+            writer.add_scalar(
+                "train/span_smooth_loss_step",
+                logs["span_smooth_loss"],
+                global_step,
+            )
             writer.add_scalar("train/lr", scheduler.get_last_lr()[0], global_step)
 
             # Update progress bar
@@ -1452,6 +1580,7 @@ def train_epoch(
                         "loss": f"{logs['total_loss']:.4f}",
                         "c_loss": f"{logs['compress_loss']:.4f}",
                         "s_loss": f"{logs['score_loss']:.4f}",
+                        "span": f"{logs['span_smooth_loss']:.4f}",
                         "lr": f"{scheduler.get_last_lr()[0]:.2e}",
                     }
                 )
@@ -1594,12 +1723,14 @@ def evaluate_multiple_models(
                 compression_loss_type = config.get("compression_loss_type", "bce")
                 focal_alpha = config.get("focal_alpha", 0.25)
                 focal_gamma = config.get("focal_gamma", 2.0)
+                span_smooth_loss_weight = config.get("span_smooth_loss_weight", 0.0)
 
                 if is_main_process(rank):
                     console.print(
                         f"Using model config: lambda_score={lambda_score}, "
                         f"compression_loss_type={compression_loss_type}, "
-                        f"focal_alpha={focal_alpha}, focal_gamma={focal_gamma}"
+                        f"focal_alpha={focal_alpha}, focal_gamma={focal_gamma}, "
+                        f"span_smooth_loss_weight={span_smooth_loss_weight}"
                     )
             else:
                 console.print(
@@ -1609,6 +1740,7 @@ def evaluate_multiple_models(
                 compression_loss_type = "bce"
                 focal_alpha = 0.25
                 focal_gamma = 2.0
+                span_smooth_loss_weight = 0.0
 
             # Evaluate
             metrics = evaluate(
@@ -1621,6 +1753,7 @@ def evaluate_multiple_models(
                 compression_loss_type=compression_loss_type,
                 focal_alpha=focal_alpha,
                 focal_gamma=focal_gamma,
+                span_smooth_loss_weight=span_smooth_loss_weight,
             )
 
             # Add model path to results
@@ -1632,6 +1765,7 @@ def evaluate_multiple_models(
                     f"Results - Loss: {metrics['loss']:.4f}, "
                     f"C_Loss: {metrics['compress_loss']:.4f}, "
                     f"S_Loss: {metrics['score_loss']:.4f}, "
+                    f"SpanSmooth: {metrics['span_smooth_loss']:.4f}, "
                     f"Acc: {metrics['accuracy']:.4f}, "
                     f"Prec: {metrics['precision']:.4f}, "
                     f"Rec: {metrics['recall']:.4f}, "
@@ -1775,6 +1909,10 @@ def main(
     use_multi_layer_fusion: bool = typer.Option(False, "--use-multi-layer-fusion"),
     early_layer_ratio: float = typer.Option(0.25, "--early-layer-ratio"),
     middle_layer_ratio: float = typer.Option(0.5, "--middle-layer-ratio"),
+    label_mode: str = typer.Option("line", "--label-mode"),
+    span_merge_gap: int = typer.Option(0, "--span-merge-gap"),
+    span_context_lines: int = typer.Option(0, "--span-context-lines"),
+    span_smooth_loss_weight: float = typer.Option(0.0, "--span-smooth-loss-weight"),
     eval_only: bool = typer.Option(False, "--eval-only"),
     eval_dataset: Optional[str] = typer.Option(None, "--eval-dataset"),
     model_paths: Optional[List[str]] = typer.Option(None, "--model-paths"),
@@ -1811,6 +1949,10 @@ def main(
         "use_multi_layer_fusion": use_multi_layer_fusion,
         "early_layer_ratio": early_layer_ratio,
         "middle_layer_ratio": middle_layer_ratio,
+        "label_mode": label_mode,
+        "span_merge_gap": span_merge_gap,
+        "span_context_lines": span_context_lines,
+        "span_smooth_loss_weight": span_smooth_loss_weight,
         "eval_only": eval_only,
         "eval_dataset": eval_dataset,
         "model_paths": model_paths,
@@ -1898,6 +2040,9 @@ def main(
         max_length=8192,
         instruction=args.instruction,
         compute_class_ratio=compute_class_ratio,
+        label_mode=args.label_mode,
+        span_merge_gap=args.span_merge_gap,
+        span_context_lines=args.span_context_lines,
     )
 
     # 处理自动focal alpha
@@ -1916,6 +2061,12 @@ def main(
 
     if is_main_process(rank):
         console.print(f"Sample-level loss aggregation: {use_sample_level_aggregation}")
+        console.print(
+            f"Label mode: {args.label_mode}, "
+            f"span_merge_gap={args.span_merge_gap}, "
+            f"span_context_lines={args.span_context_lines}, "
+            f"span_smooth_loss_weight={args.span_smooth_loss_weight}"
+        )
 
     # Handle attention export mode (before creating dataset)
     if args.export_attention:
@@ -1957,6 +2108,9 @@ def main(
             max_length=8192,
             instruction=args.instruction,
             compute_class_ratio=False,
+            label_mode=args.label_mode,
+            span_merge_gap=args.span_merge_gap,
+            span_context_lines=args.span_context_lines,
         )
 
         # Export attention for each model
@@ -2226,6 +2380,7 @@ def main(
             effective_focal_alpha,
             args.focal_gamma,
             use_sample_level_aggregation,
+            args.span_smooth_loss_weight,
         )
 
         # Evaluate
@@ -2242,6 +2397,7 @@ def main(
             compression_loss_type=args.compression_loss_type,
             focal_alpha=effective_focal_alpha,
             focal_gamma=args.focal_gamma,
+            span_smooth_loss_weight=args.span_smooth_loss_weight,
         )
 
         # Log to tensorboard (only on main process)
@@ -2249,6 +2405,9 @@ def main(
             writer.add_scalar("val/loss", val_metrics["loss"], epoch)
             writer.add_scalar("val/compress_loss", val_metrics["compress_loss"], epoch)
             writer.add_scalar("val/score_loss", val_metrics["score_loss"], epoch)
+            writer.add_scalar(
+                "val/span_smooth_loss", val_metrics["span_smooth_loss"], epoch
+            )
             writer.add_scalar("val/accuracy", val_metrics["accuracy"], epoch)
             writer.add_scalar("val/precision", val_metrics["precision"], epoch)
             writer.add_scalar("val/recall", val_metrics["recall"], epoch)
@@ -2259,6 +2418,7 @@ def main(
                 f"Val - Loss: {val_metrics['loss']:.4f}, "
                 f"C_Loss: {val_metrics['compress_loss']:.4f}, "
                 f"S_Loss: {val_metrics['score_loss']:.4f}, "
+                f"SpanSmooth: {val_metrics['span_smooth_loss']:.4f}, "
                 f"Acc: {val_metrics['accuracy']:.4f}, "
                 f"Prec: {val_metrics['precision']:.4f}, "
                 f"Rec: {val_metrics['recall']:.4f}, "
@@ -2301,6 +2461,10 @@ def main(
                     "focal_alpha": effective_focal_alpha,
                     "focal_alpha_auto": args.auto_focal_alpha,
                     "focal_gamma": args.focal_gamma,
+                    "label_mode": args.label_mode,
+                    "span_merge_gap": args.span_merge_gap,
+                    "span_context_lines": args.span_context_lines,
+                    "span_smooth_loss_weight": args.span_smooth_loss_weight,
                     "lambda_score": args.lambda_score,
                     "use_sample_level_aggregation": use_sample_level_aggregation,
                 }

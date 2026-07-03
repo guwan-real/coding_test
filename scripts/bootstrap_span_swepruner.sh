@@ -25,13 +25,18 @@ INSTALL_MINI_ENV="${INSTALL_MINI_ENV:-1}"
 INSTALL_FLASH_ATTN="${INSTALL_FLASH_ATTN:-1}"
 DOWNLOAD_MODELS="${DOWNLOAD_MODELS:-1}"
 DOWNLOAD_BASE_MODEL="${DOWNLOAD_BASE_MODEL:-0}"
+TORCH_VERSION="${TORCH_VERSION:-2.8.0+cu126}"
+TORCHVISION_VERSION="${TORCHVISION_VERSION:-0.23.0+cu126}"
+PYTORCH_INDEX_URL="${PYTORCH_INDEX_URL:-https://download.pytorch.org/whl/cu126}"
 
 PRUNER_MODEL_REPO="${PRUNER_MODEL_REPO:-ayanami-kitasan/code-pruner}"
 PRUNER_MODEL_DIR="${PRUNER_MODEL_DIR:-${MODELS_DIR}/code-pruner}"
 BASE_MODEL_REPO="${BASE_MODEL_REPO:-Qwen/Qwen3-Reranker-0.6B}"
 BASE_MODEL_DIR="${BASE_MODEL_DIR:-${MODELS_DIR}/Qwen3-Reranker-0.6B}"
+MAX_JOBS="${MAX_JOBS:-8}"
 
 export HF_ENDPOINT HF_HOME HUGGINGFACE_HUB_CACHE TRANSFORMERS_CACHE
+export MAX_JOBS
 unset PYTHONHOME PYTHONPATH
 
 install_uv() {
@@ -40,6 +45,17 @@ install_uv() {
   fi
   python3 -m pip install --user -U uv
   export PATH="${HOME}/.local/bin:${PATH}"
+}
+
+hf_download() {
+  local env_dir="$1"
+  local repo_id="$2"
+  local out_dir="$3"
+  if [[ -x "${env_dir}/bin/hf" ]]; then
+    "${env_dir}/bin/hf" download "${repo_id}" --local-dir "${out_dir}"
+  else
+    "${env_dir}/bin/huggingface-cli" download "${repo_id}" --local-dir "${out_dir}"
+  fi
 }
 
 has_real_safetensors() {
@@ -55,18 +71,18 @@ install_uv
 
 if [[ "${INSTALL_PRUNER_ENV}" == "1" ]]; then
   uv venv --python 3.12 "${PRUNER_ENV}"
-  uv pip install --python "${PRUNER_ENV}/bin/python" torch torchvision --index-url https://download.pytorch.org/whl/cu126
+  uv pip install --python "${PRUNER_ENV}/bin/python" "torch==${TORCH_VERSION}" "torchvision==${TORCHVISION_VERSION}" --index-url "${PYTORCH_INDEX_URL}"
   uv pip install --python "${PRUNER_ENV}/bin/python" -e "${PROJECT_ROOT}/swe-pruner"
-  uv pip install --python "${PRUNER_ENV}/bin/python" wheel packaging ninja
+  uv pip install --python "${PRUNER_ENV}/bin/python" wheel packaging ninja psutil
   if [[ "${INSTALL_FLASH_ATTN}" == "1" ]]; then
-    uv pip install --python "${PRUNER_ENV}/bin/python" flash-attn --no-build-isolation || true
+    uv pip install --python "${PRUNER_ENV}/bin/python" flash-attn --no-build-isolation
   fi
 fi
 
 if [[ "${INSTALL_TRAIN_ENV}" == "1" ]]; then
   uv venv --python 3.12 "${TRAIN_ENV}"
-  uv pip install --python "${TRAIN_ENV}/bin/python" torch torchvision --index-url https://download.pytorch.org/whl/cu126
-  uv pip install --python "${TRAIN_ENV}/bin/python" transformers torchmetrics typer rich pydantic tqdm tensorboard wheel packaging ninja
+  uv pip install --python "${TRAIN_ENV}/bin/python" "torch==${TORCH_VERSION}" "torchvision==${TORCHVISION_VERSION}" --index-url "${PYTORCH_INDEX_URL}"
+  uv pip install --python "${TRAIN_ENV}/bin/python" transformers torchmetrics typer rich pydantic tqdm tensorboard wheel packaging ninja psutil
   if [[ "${INSTALL_FLASH_ATTN}" == "1" ]]; then
     uv pip install --python "${TRAIN_ENV}/bin/python" flash-attn --no-build-isolation
   fi
@@ -79,12 +95,12 @@ fi
 
 if [[ "${DOWNLOAD_MODELS}" == "1" ]]; then
   if ! has_real_safetensors "${PRUNER_MODEL_DIR}/model.safetensors"; then
-    "${PRUNER_ENV}/bin/huggingface-cli" download "${PRUNER_MODEL_REPO}" --local-dir "${PRUNER_MODEL_DIR}" --local-dir-use-symlinks False
+    hf_download "${PRUNER_ENV}" "${PRUNER_MODEL_REPO}" "${PRUNER_MODEL_DIR}"
   fi
 fi
 
 if [[ "${DOWNLOAD_BASE_MODEL}" == "1" ]]; then
-  "${PRUNER_ENV}/bin/huggingface-cli" download "${BASE_MODEL_REPO}" --local-dir "${BASE_MODEL_DIR}" --local-dir-use-symlinks False
+  hf_download "${PRUNER_ENV}" "${BASE_MODEL_REPO}" "${BASE_MODEL_DIR}"
 fi
 
 cat > "${PROJECT_ROOT}/.env.server" <<EOF

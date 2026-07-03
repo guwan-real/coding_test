@@ -19,8 +19,29 @@ from rich.console import Console
 from tqdm import tqdm
 import torchmetrics
 import os
+import importlib.util
 
 console = Console()
+
+
+def resolve_attn_implementation(attn_implementation: Optional[str]) -> Optional[str]:
+    if attn_implementation in (None, "", "none"):
+        return None
+    if attn_implementation == "auto":
+        return (
+            "flash_attention_2"
+            if importlib.util.find_spec("flash_attn") is not None
+            else "sdpa"
+        )
+    if (
+        attn_implementation == "flash_attention_2"
+        and importlib.util.find_spec("flash_attn") is None
+    ):
+        raise RuntimeError(
+            "flash-attn is required for attn_implementation='flash_attention_2'. "
+            "Run scripts/repair_flash_attn.sh or set --attn-implementation sdpa explicitly."
+        )
+    return attn_implementation
 
 
 def setup_ddp():
@@ -393,6 +414,7 @@ class TokenScorer(nn.Module):
         early_layer_ratio: float = 0.25,
         middle_layer_ratio: float = 0.5,
         compression_head_type: str = "ffn",
+        attn_implementation: str = "auto",
     ):
         super().__init__()
         self.is_llm = True  # LLM-only (BERT path removed)
@@ -402,7 +424,7 @@ class TokenScorer(nn.Module):
         self.backbone = AutoModel.from_pretrained(
             model_name,
             torch_dtype=torch.float16,
-            attn_implementation="flash_attention_2",
+            attn_implementation=resolve_attn_implementation(attn_implementation),
             device_map=None,
         )
         hidden_size = self.backbone.config.hidden_size
@@ -1650,6 +1672,7 @@ def load_model_from_checkpoint(
         early_layer_ratio=config.get("early_layer_ratio", 0.25),
         middle_layer_ratio=config.get("middle_layer_ratio", 0.5),
         compression_head_type=config.get("compression_head_type", "ffn"),
+        attn_implementation=config.get("attn_implementation", "auto"),
     )
 
     # Load weights
@@ -1909,6 +1932,7 @@ def main(
     use_multi_layer_fusion: bool = typer.Option(False, "--use-multi-layer-fusion"),
     early_layer_ratio: float = typer.Option(0.25, "--early-layer-ratio"),
     middle_layer_ratio: float = typer.Option(0.5, "--middle-layer-ratio"),
+    attn_implementation: str = typer.Option("auto", "--attn-implementation"),
     label_mode: str = typer.Option("line", "--label-mode"),
     span_merge_gap: int = typer.Option(0, "--span-merge-gap"),
     span_context_lines: int = typer.Option(0, "--span-context-lines"),
@@ -1949,6 +1973,7 @@ def main(
         "use_multi_layer_fusion": use_multi_layer_fusion,
         "early_layer_ratio": early_layer_ratio,
         "middle_layer_ratio": middle_layer_ratio,
+        "attn_implementation": attn_implementation,
         "label_mode": label_mode,
         "span_merge_gap": span_merge_gap,
         "span_context_lines": span_context_lines,
@@ -2282,6 +2307,7 @@ def main(
         early_layer_ratio=args.early_layer_ratio,
         middle_layer_ratio=args.middle_layer_ratio,
         compression_head_type=args.compression_head_type,  # 新增
+        attn_implementation=args.attn_implementation,
     )
     scorer = scorer.to(device)
 
@@ -2456,6 +2482,7 @@ def main(
                     "use_multi_layer_fusion": args.use_multi_layer_fusion,
                     "early_layer_ratio": args.early_layer_ratio,
                     "middle_layer_ratio": args.middle_layer_ratio,
+                    "attn_implementation": args.attn_implementation,
                     "compression_head_type": args.compression_head_type,
                     "compression_loss_type": args.compression_loss_type,
                     "focal_alpha": effective_focal_alpha,

@@ -1,8 +1,29 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import importlib.util
 from typing import Dict, Optional
 from transformers import AutoConfig, AutoModel, AutoTokenizer
+
+
+def resolve_attn_implementation(attn_implementation: Optional[str]) -> Optional[str]:
+    if attn_implementation in (None, "", "none"):
+        return None
+    if attn_implementation == "auto":
+        return (
+            "flash_attention_2"
+            if importlib.util.find_spec("flash_attn") is not None
+            else "sdpa"
+        )
+    if (
+        attn_implementation == "flash_attention_2"
+        and importlib.util.find_spec("flash_attn") is None
+    ):
+        raise RuntimeError(
+            "flash-attn is required for attn_implementation='flash_attention_2'. "
+            "Run scripts/repair_flash_attn.sh or use attn_implementation='sdpa'."
+        )
+    return attn_implementation
 
 
 class CRFLayer(nn.Module):
@@ -212,14 +233,14 @@ class TokenScorer(nn.Module):
         backbone_config: Optional[AutoConfig] = None,
         trust_remote_code: bool = True,
         torch_dtype: Optional[torch.dtype] = None,
-        attn_implementation: Optional[str] = "flash_attention_2",
-        # HINT: requires flash attn 2
+        attn_implementation: Optional[str] = "auto",
     ):
         super().__init__()
         self.use_multi_layer_fusion = use_multi_layer_fusion
 
         if isinstance(torch_dtype, str):
             torch_dtype = getattr(torch, torch_dtype, None)
+        attn_implementation = resolve_attn_implementation(attn_implementation)
 
         if load_pretrained_backbone:
             backbone_kwargs = {

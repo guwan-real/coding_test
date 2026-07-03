@@ -151,6 +151,7 @@ python -m train.inference.build_label \
 - **`--model-name`** – Base model name or path. **Required.**
 - **`--num-finetune-layers`** – Top transformer layers to unfreeze; 0 = freeze all (default: 0).
 - **`--instruction`** – System instruction for the query–document task.
+- **`--attn-implementation`** – Attention backend passed to Transformers. Default server scripts use `flash_attention_2`; `auto` uses `flash_attention_2` when installed and otherwise falls back to `sdpa`.
 
 ### Compression head
 - **`--compression-head-type`** – `ffn` | `simple` | `residual` | `crf` (default: `ffn`).

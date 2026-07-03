@@ -51,6 +51,7 @@ bash "${PROJECT_ROOT}/train/train_llm.sh" "${NUM_GPUS}" "${TRAIN_JSONL}" \
   --focal-alpha "${FOCAL_ALPHA:-0.65}" \
   --focal-gamma "${FOCAL_GAMMA:-2.0}" \
   --dropout "${DROPOUT:-0.4}" \
+  --attn-implementation "${ATTN_IMPLEMENTATION:-flash_attention_2}" \
   --label-mode span \
   --span-merge-gap "${SPAN_MERGE_GAP:-3}" \
   --span-context-lines "${SPAN_CONTEXT_LINES:-1}" \

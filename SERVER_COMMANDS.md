@@ -63,7 +63,7 @@ DOWNLOAD_MODELS=0 bash scripts/bootstrap_span_swepruner.sh
 INSTALL_TRAIN_ENV=0 INSTALL_MINI_ENV=0 bash scripts/bootstrap_span_swepruner.sh
 ```
 
-If `flash-attn` fails because the build environment is missing `wheel`, repair the partially-created environments and resume bootstrap:
+`flash-attn` is required by the default training and serving commands. The scripts pin PyTorch to `2.8.0+cu126` to match available flash-attn wheels. If bootstrap was previously run with a newer torch and flash-attn failed, repair the partially-created environments with:
 
 ```bash
 bash scripts/repair_flash_attn.sh

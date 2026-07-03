@@ -64,6 +64,7 @@ bash "${PROJECT_ROOT}/train/train_llm.sh" "${NUM_GPUS}" "${TRAIN_JSONL}" \
   --compression-loss-type "${COMPRESSION_LOSS_TYPE}" \
   --focal-gamma "${FOCAL_GAMMA}" \
   --dropout "${DROPOUT:-0.4}" \
+  --attn-implementation "${ATTN_IMPLEMENTATION:-flash_attention_2}" \
   --use-multi-layer-fusion \
   --use-sample-level-aggregation \
   "${EXTRA_ARGS[@]}"

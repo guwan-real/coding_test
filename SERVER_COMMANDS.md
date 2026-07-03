@@ -86,10 +86,44 @@ PRUNER_PORT=8001 PRUNER_URL=http://127.0.0.1:8001/prune bash scripts/run_span_se
 
 ## 4. Train the span-aware FFN/focal candidate
 
-Place the labeled SWE-Pruner JSONL at:
+Prepare the labeled SWE-Pruner JSONL at:
 
 ```text
 /home/yuantao/futao/span_swepruner/data/swe-pruner-training-dataset-py.jsonl
+```
+
+If you already have an official or custom JSONL file, standardize it with:
+
+```bash
+SOURCE_JSONL=/path/to/source.jsonl bash scripts/prepare_training_data.sh
+```
+
+If you collected mini-SWE-agent trajectories with pruner stats, build agent-native data and use it for training:
+
+```bash
+TRAJ_DIR=/home/yuantao/futao/span_swepruner/runs/swebench_span_pilot \
+OUTPUT_JSONL=/home/yuantao/futao/span_swepruner/data/agent_span_data.jsonl \
+bash scripts/build_agent_span_dataset.sh
+
+AGENT_JSONL=/home/yuantao/futao/span_swepruner/data/agent_span_data.jsonl \
+bash scripts/prepare_training_data.sh
+```
+
+To collect new agent-native span data from SWE-bench using the current pruner service:
+
+```bash
+export OPENAI_API_KEY="${DASHSCOPE_API_KEY}"
+export OPENAI_API_BASE=https://dashscope.aliyuncs.com/compatible-mode/v1
+export SOLVER_MODEL=openai/qwen-plus
+PRUNER_PORT=8001 LIMIT=20 WORKERS=2 bash scripts/collect_agent_span_data.sh
+```
+
+You can also mix official and agent-native data:
+
+```bash
+SOURCE_JSONL=/path/to/official.jsonl \
+AGENT_JSONL=/home/yuantao/futao/span_swepruner/data/agent_span_data.jsonl \
+bash scripts/prepare_training_data.sh
 ```
 
 Then run:

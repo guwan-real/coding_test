@@ -252,7 +252,13 @@ class DefaultAgent:
         
         # saves other stats
         output["pruned_stats"] = {
+            "query": context_focus_question,
+            "action": action.get("action"),
+            "operation_type": _classify_shell_action(action["action"]),
             "score": pruned_result.score,
+            "kept_frags": pruned_result.kept_frags,
+            "original_output": text,
+            "pruned_output": pruned_result.pruned_code,
             "origin_token_cnt": pruned_result.origin_token_cnt,
             "left_token_cnt": pruned_result.left_token_cnt,
             "model_input_token_cnt": pruned_result.model_input_token_cnt,

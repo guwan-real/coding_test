@@ -122,6 +122,12 @@ On another server after `git pull`, fetch the LFS dataset with:
 bash scripts/pull_training_data_lfs.sh
 ```
 
+Download the training base model before launching training:
+
+```bash
+bash scripts/download_base_model.sh
+```
+
 If you collected mini-SWE-agent trajectories with pruner stats, build agent-native data and use it for training:
 
 ```bash

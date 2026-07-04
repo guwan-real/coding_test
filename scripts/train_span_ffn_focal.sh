@@ -19,6 +19,10 @@ BASE_MODEL_DIR="${BASE_MODEL_DIR:-${PROJECT_ROOT}/models/Qwen3-Reranker-0.6B}"
 
 if [[ -d "${BASE_MODEL_DIR}" && -f "${BASE_MODEL_DIR}/config.json" ]]; then
   BASE_MODEL="${BASE_MODEL_DIR}"
+else
+  echo "Missing local base model: ${BASE_MODEL_DIR}" >&2
+  echo "Run: bash ${PROJECT_ROOT}/scripts/download_base_model.sh" >&2
+  exit 1
 fi
 
 if [[ ! -f "${TRAIN_JSONL}" ]]; then

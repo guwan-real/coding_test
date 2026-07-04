@@ -110,6 +110,18 @@ It writes to:
 /home/yuantao/futao/span_swepruner/data/swe-pruner-training-dataset-py.jsonl
 ```
 
+To publish that downloaded dataset to GitHub LFS so later servers can pull it from the repo:
+
+```bash
+bash scripts/publish_training_data_lfs.sh
+```
+
+On another server after `git pull`, fetch the LFS dataset with:
+
+```bash
+bash scripts/pull_training_data_lfs.sh
+```
+
 If you collected mini-SWE-agent trajectories with pruner stats, build agent-native data and use it for training:
 
 ```bash

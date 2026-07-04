@@ -38,6 +38,20 @@ mkdir -p "${LOG_DIR}"
 PATH="${TRAIN_ENV}/bin:${PATH}"
 export PATH
 
+if ! "${TRAIN_ENV}/bin/python" - <<'PY' >/dev/null 2>&1
+import tensorboard
+import torchmetrics
+import transformers
+import typer
+import rich
+import pydantic
+import tqdm
+PY
+then
+  uv pip install --python "${TRAIN_ENV}/bin/python" \
+    tensorboard torchmetrics transformers typer rich pydantic tqdm
+fi
+
 bash "${PROJECT_ROOT}/train/train_llm.sh" "${NUM_GPUS}" "${TRAIN_JSONL}" \
   --model-name "${BASE_MODEL}" \
   --epochs "${EPOCHS:-3}" \

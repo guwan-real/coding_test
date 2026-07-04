@@ -50,6 +50,19 @@ fi
 
 PATH="${TRAIN_ENV}/bin:${PATH}"
 export PATH
+if ! "${TRAIN_ENV}/bin/python" - <<'PY' >/dev/null 2>&1
+import tensorboard
+import torchmetrics
+import transformers
+import typer
+import rich
+import pydantic
+import tqdm
+PY
+then
+  uv pip install --python "${TRAIN_ENV}/bin/python" \
+    tensorboard torchmetrics transformers typer rich pydantic tqdm
+fi
 "${TRAIN_ENV}/bin/python" -m torch.distributed.run --help >/dev/null
 
 bash "${PROJECT_ROOT}/train/train_llm.sh" "${NUM_GPUS}" "${TRAIN_JSONL}" \

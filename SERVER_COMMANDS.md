@@ -84,7 +84,84 @@ This checks the pruner service and the new span/protected-operation behavior. It
 PRUNER_PORT=8001 PRUNER_URL=http://127.0.0.1:8001/prune bash scripts/run_span_service_smoke.sh
 ```
 
-## 4. Train the span-aware FFN/focal candidate
+## 4. Build repair-aware training data
+
+This is the main research path. It builds `kept_frags = CORE repair lines + SUPPORT repair context` from SWE-bench gold patches or from the official SWE-Pruner data as a smoke/auxiliary source.
+
+Required inputs for the SWE-bench path:
+
+```text
+/home/yuantao/futao/span_swepruner/data/swebench_train.jsonl
+/home/yuantao/futao/span_swepruner/data/swebench_repos/
+```
+
+`swebench_train.jsonl` should contain the SWE-bench train split metadata with `instance_id`, `repo`, `base_commit`, `problem_statement`, and `patch`. `swebench_repos/` should contain repo checkouts, usually named either `owner__repo`, `owner_repo`, `repo`, or directly as a repo root.
+
+Run the repair-aware data pipeline with the local Qwen teacher:
+
+```bash
+cd /home/yuantao/futao/span_swepruner
+
+SOURCE=swebench \
+INPUT_JSONL=/home/yuantao/futao/span_swepruner/data/swebench_train.jsonl \
+REPO_ROOT=/home/yuantao/futao/span_swepruner/data/swebench_repos \
+TEACHER_BASE_URL=http://127.0.0.1:8015/v1 \
+TEACHER_MODEL=Qwen3.5-27B \
+TEACHER_WORKERS=8 \
+bash /home/yuantao/futao/span_swepruner/scripts/run_repair_aware_pipeline.sh
+```
+
+For a quick smoke test using the official 61k SWE-Pruner data instead of SWE-bench patches:
+
+```bash
+cd /home/yuantao/futao/span_swepruner
+bash scripts/download_official_training_data.sh
+
+SOURCE=official_swepruner \
+INPUT_JSONL=/home/yuantao/futao/span_swepruner/data/swe-pruner-training-dataset-py.jsonl \
+MAX_SAMPLES=200 \
+TEACHER_BASE_URL=http://127.0.0.1:8015/v1 \
+TEACHER_MODEL=Qwen3.5-27B \
+TEACHER_WORKERS=8 \
+bash /home/yuantao/futao/span_swepruner/scripts/run_repair_aware_pipeline.sh
+```
+
+Main outputs:
+
+```text
+data/repair_candidates.*.jsonl
+data/repair_teacher_labels.*.qwen35.jsonl
+data/repair_teacher_labels.*.qwen35.valid.jsonl
+data/repair_teacher_labels.*.qwen35.reject.jsonl
+data/swepruner_repair_qwen35_train.jsonl
+data/inspect_repair_labels.*.md
+```
+
+## 5. Train the repair-aware CRF/focal model
+
+Download the training base model before launching training:
+
+```bash
+cd /home/yuantao/futao/span_swepruner
+bash scripts/download_base_model.sh
+```
+
+Run repair-aware CRF training on up to four GPUs:
+
+```bash
+cd /home/yuantao/futao/span_swepruner
+
+CUDA_VISIBLE_DEVICES=2,3,4,5 \
+NUM_GPUS=4 \
+BATCH_SIZE=4 \
+EPOCHS=3 \
+TRAIN_JSONL=/home/yuantao/futao/span_swepruner/data/swepruner_repair_qwen35_train.jsonl \
+bash /home/yuantao/futao/span_swepruner/scripts/train_repair_crf_focal.sh
+```
+
+Outputs go to `runs/train_repair_crf_focal/<timestamp>/`.
+
+## 6. Train the span-aware FFN/focal baseline
 
 Prepare the labeled SWE-Pruner JSONL at:
 
@@ -177,7 +254,7 @@ The line-label baseline is still available:
 CUDA_VISIBLE_DEVICES=0 NUM_GPUS=1 bash scripts/train_line_ffn_focal.sh
 ```
 
-## 5. Run a one-instance SWE-bench pilot with span pruning
+## 7. Run a one-instance SWE-bench pilot with span pruning
 
 This requires Docker or Singularity, a solver API key, and a running pruner service. The script starts the pruner service if needed.
 

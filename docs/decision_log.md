@@ -27,3 +27,23 @@
   - `scripts/build_agent_span_dataset.sh`: server wrapper for trajectory-to-JSONL conversion.
   - `scripts/prepare_training_data.sh`: validates and combines official/custom JSONL and agent-native JSONL into `data/swe-pruner-training-dataset-py.jsonl`.
   - `scripts/collect_agent_span_data.sh`: runs a small SWE-bench span-pruning pilot and immediately converts the resulting trajectories into training data.
+
+## 2026-07-05 - Pivot to repair-aware supervision
+
+- The span-label FFN/focal path is no longer the main research claim. It remains a baseline/ablation because it still derives supervision from original SWE-Pruner `kept_frags`.
+- Main claim is now repair-aware supervision: build labels from real repair signals where `kept_frags = CORE repair lines + SUPPORT repair context`.
+- First implementation uses:
+  - SWE-bench train gold patches as the primary repair signal.
+  - Python AST/static analysis to generate candidate regions.
+  - A local OpenAI-compatible Qwen teacher to classify only candidate regions as `CORE`, `SUPPORT`, or `DROP`.
+  - Deterministic validation to keep labels inside candidate ranges and force seed CORE retention.
+  - Export back to the official SWE-Pruner JSONL format so the existing trainer can be reused.
+- New scripts:
+  - `scripts/build_repair_candidates.py`
+  - `scripts/teacher_label_repair_context.py`
+  - `scripts/validate_teacher_labels.py`
+  - `scripts/export_swepruner_training_jsonl.py`
+  - `scripts/inspect_repair_labels.py`
+  - `scripts/run_repair_aware_pipeline.sh`
+  - `scripts/train_repair_crf_focal.sh`
+- Training default for the repair-aware path is CRF + focal + auto focal alpha with line labels. Span inference and protected write/test/submit behavior remain useful at agent serving time.

@@ -18,6 +18,9 @@ TEACHER_MODEL="${TEACHER_MODEL:-Qwen3.5-27B}"
 TEACHER_WORKERS="${TEACHER_WORKERS:-8}"
 MAX_SAMPLES="${MAX_SAMPLES:-0}"
 TEACHER_LIMIT="${TEACHER_LIMIT:-0}"
+PROGRESS_EVERY="${PROGRESS_EVERY:-100}"
+TEACHER_PROGRESS_EVERY="${TEACHER_PROGRESS_EVERY:-5}"
+export PYTHONUNBUFFERED=1
 
 mkdir -p "${DATA_DIR}"
 
@@ -41,12 +44,14 @@ if [[ "${SOURCE}" == "swebench" ]]; then
     exit 1
   fi
   CANDIDATES_JSONL="${CANDIDATES_JSONL:-${DATA_DIR}/repair_candidates.swebench_train.jsonl}"
-  "${TRAIN_ENV}/bin/python" "${PROJECT_ROOT}/scripts/build_repair_candidates.py" \
+  echo "[repair-aware] stage 1/5: building SWE-bench repair candidates"
+  "${TRAIN_ENV}/bin/python" -u "${PROJECT_ROOT}/scripts/build_repair_candidates.py" \
     --source swebench \
     --input "${INPUT_JSONL}" \
     --repo-root "${REPO_ROOT}" \
     --output "${CANDIDATES_JSONL}" \
     --lang python \
+    --progress-every "${PROGRESS_EVERY}" \
     ${CHECKOUT_BASE_COMMIT:+--checkout-base-commit} \
     ${MAX_SAMPLES:+--max-samples "${MAX_SAMPLES}"}
 elif [[ "${SOURCE}" == "official_swepruner" ]]; then
@@ -57,11 +62,13 @@ elif [[ "${SOURCE}" == "official_swepruner" ]]; then
     exit 1
   fi
   CANDIDATES_JSONL="${CANDIDATES_JSONL:-${DATA_DIR}/repair_candidates.official61k.jsonl}"
-  "${TRAIN_ENV}/bin/python" "${PROJECT_ROOT}/scripts/build_repair_candidates.py" \
+  echo "[repair-aware] stage 1/5: building official-data repair candidates"
+  "${TRAIN_ENV}/bin/python" -u "${PROJECT_ROOT}/scripts/build_repair_candidates.py" \
     --source official_swepruner \
     --input "${INPUT_JSONL}" \
     --output "${CANDIDATES_JSONL}" \
     --lang python \
+    --progress-every "${PROGRESS_EVERY}" \
     ${MAX_SAMPLES:+--max-samples "${MAX_SAMPLES}"}
 else
   echo "Unknown SOURCE=${SOURCE}; expected swebench or official_swepruner." >&2
@@ -74,7 +81,8 @@ REJECT_JSONL="${REJECT_JSONL:-${DATA_DIR}/repair_teacher_labels.${SOURCE}.qwen35
 TRAIN_JSONL="${TRAIN_JSONL:-${DATA_DIR}/swepruner_repair_qwen35_train.jsonl}"
 INSPECT_MD="${INSPECT_MD:-${DATA_DIR}/inspect_repair_labels.${SOURCE}.md}"
 
-"${TRAIN_ENV}/bin/python" "${PROJECT_ROOT}/scripts/teacher_label_repair_context.py" \
+echo "[repair-aware] stage 2/5: teacher labeling candidate regions"
+"${TRAIN_ENV}/bin/python" -u "${PROJECT_ROOT}/scripts/teacher_label_repair_context.py" \
   --input "${CANDIDATES_JSONL}" \
   --output "${TEACHER_JSONL}" \
   --base-url "${TEACHER_BASE_URL}" \
@@ -82,21 +90,25 @@ INSPECT_MD="${INSPECT_MD:-${DATA_DIR}/inspect_repair_labels.${SOURCE}.md}"
   --temperature "${TEACHER_TEMPERATURE:-0}" \
   --max-tokens "${TEACHER_MAX_TOKENS:-2048}" \
   --num-workers "${TEACHER_WORKERS}" \
+  --progress-every "${TEACHER_PROGRESS_EVERY}" \
   ${TEACHER_LIMIT:+--limit "${TEACHER_LIMIT}"}
 
-"${TRAIN_ENV}/bin/python" "${PROJECT_ROOT}/scripts/validate_teacher_labels.py" \
+echo "[repair-aware] stage 3/5: validating teacher labels"
+"${TRAIN_ENV}/bin/python" -u "${PROJECT_ROOT}/scripts/validate_teacher_labels.py" \
   --input "${TEACHER_JSONL}" \
   --output "${VALID_JSONL}" \
   --reject-output "${REJECT_JSONL}" \
   --max-support-lines-per-sample "${MAX_SUPPORT_LINES_PER_SAMPLE:-200}" \
   --max-helper-regions "${MAX_HELPER_REGIONS:-3}"
 
-"${TRAIN_ENV}/bin/python" "${PROJECT_ROOT}/scripts/export_swepruner_training_jsonl.py" \
+echo "[repair-aware] stage 4/5: exporting SWE-Pruner training JSONL"
+"${TRAIN_ENV}/bin/python" -u "${PROJECT_ROOT}/scripts/export_swepruner_training_jsonl.py" \
   --input "${VALID_JSONL}" \
   --output "${TRAIN_JSONL}" \
   --score-default "${SCORE_DEFAULT:-1.0}"
 
-"${TRAIN_ENV}/bin/python" "${PROJECT_ROOT}/scripts/inspect_repair_labels.py" \
+echo "[repair-aware] stage 5/5: rendering label inspection report"
+"${TRAIN_ENV}/bin/python" -u "${PROJECT_ROOT}/scripts/inspect_repair_labels.py" \
   --input "${TRAIN_JSONL}" \
   --output "${INSPECT_MD}" \
   --num-samples "${INSPECT_SAMPLES:-50}"

@@ -14,7 +14,6 @@ from repair_context_utils import (
     normalize_lines,
     parse_unified_diff,
     read_jsonl,
-    write_jsonl,
 )
 
 
@@ -130,32 +129,61 @@ def main() -> None:
     parser.add_argument("--max-helper-regions", type=int, default=3)
     parser.add_argument("--negative-regions", type=int, default=2)
     parser.add_argument("--max-samples", type=int, default=0)
+    parser.add_argument("--progress-every", type=int, default=100)
     args = parser.parse_args()
 
     if args.source == "swebench" and args.repo_root is None:
         raise SystemExit("--repo-root is required for --source swebench")
 
-    outputs = []
     skipped = 0
-    for idx, row in enumerate(read_jsonl(args.input), 1):
-        if args.source == "official_swepruner":
-            sample = build_official_sample(row, idx, args)
-            if sample:
-                outputs.append(sample)
+    count = 0
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    print(
+        json.dumps(
+            {
+                "stage": "build_candidates_start",
+                "source": args.source,
+                "input": str(args.input),
+                "output": str(args.output),
+                "max_samples": args.max_samples,
+            },
+            indent=2,
+        ),
+        flush=True,
+    )
+    with args.output.open("w", encoding="utf-8") as f:
+        for idx, row in enumerate(read_jsonl(args.input), 1):
+            if args.source == "official_swepruner":
+                sample = build_official_sample(row, idx, args)
+                samples = [sample] if sample else []
             else:
-                skipped += 1
-        else:
-            samples = build_swebench_samples(row, idx, args)
+                samples = build_swebench_samples(row, idx, args)
             if samples:
-                outputs.extend(samples)
+                for sample in samples:
+                    if sample is None:
+                        continue
+                    f.write(json.dumps(sample, ensure_ascii=False) + "\n")
+                    count += 1
+                    if args.max_samples and count >= args.max_samples:
+                        break
             else:
                 skipped += 1
-        if args.max_samples and len(outputs) >= args.max_samples:
-            outputs = outputs[: args.max_samples]
-            break
-
-    count = write_jsonl(args.output, outputs)
+            if args.progress_every > 0 and (idx % args.progress_every == 0 or count == args.max_samples):
+                print(
+                    json.dumps(
+                        {
+                            "stage": "build_candidates_progress",
+                            "rows_read": idx,
+                            "candidates_written": count,
+                            "skipped_rows": skipped,
+                        }
+                    ),
+                    flush=True,
+                )
+            if args.max_samples and count >= args.max_samples:
+                break
     summary = {
+        "stage": "build_candidates_done",
         "source": args.source,
         "input": str(args.input),
         "output": str(args.output),

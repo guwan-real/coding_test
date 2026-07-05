@@ -120,10 +120,30 @@ bash scripts/download_official_training_data.sh
 SOURCE=official_swepruner \
 INPUT_JSONL=/home/yuantao/futao/span_swepruner/data/swe-pruner-training-dataset-py.jsonl \
 MAX_SAMPLES=200 \
+PROGRESS_EVERY=50 \
+TEACHER_PROGRESS_EVERY=5 \
 TEACHER_BASE_URL=http://127.0.0.1:8015/v1 \
 TEACHER_MODEL=Qwen3.5-27B \
 TEACHER_WORKERS=8 \
 bash /home/yuantao/futao/span_swepruner/scripts/run_repair_aware_pipeline.sh
+```
+
+The script prints five visible stages:
+
+```text
+[repair-aware] stage 1/5: building ... candidates
+[repair-aware] stage 2/5: teacher labeling candidate regions
+[repair-aware] stage 3/5: validating teacher labels
+[repair-aware] stage 4/5: exporting SWE-Pruner training JSONL
+[repair-aware] stage 5/5: rendering label inspection report
+```
+
+During stage 1 it prints `build_candidates_progress`. During stage 2 it prints `teacher_label_progress`. You can also check whether files are growing:
+
+```bash
+cd /home/yuantao/futao/span_swepruner
+wc -l data/repair_candidates.*.jsonl data/repair_teacher_labels.*.qwen35.jsonl 2>/dev/null || true
+tail -n 1 data/repair_teacher_labels.official_swepruner.qwen35.jsonl 2>/dev/null || true
 ```
 
 Main outputs:

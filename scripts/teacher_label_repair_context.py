@@ -217,6 +217,7 @@ def main() -> None:
     parser.add_argument("--max-code-lines", type=int, default=1200)
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--no-resume", action="store_true")
+    parser.add_argument("--progress-every", type=int, default=5)
     args = parser.parse_args()
 
     api_key = os.environ.get(args.api_key_env) or os.environ.get("QWEN_API_KEY")
@@ -230,7 +231,22 @@ def main() -> None:
         if args.limit and len(samples) >= args.limit:
             break
 
-    print(json.dumps({"input": str(args.input), "output": str(args.output), "todo": len(samples), "resume_skipped": len(completed)}, indent=2))
+    print(
+        json.dumps(
+            {
+                "stage": "teacher_label_start",
+                "input": str(args.input),
+                "output": str(args.output),
+                "base_url": args.base_url,
+                "model": args.model,
+                "num_workers": args.num_workers,
+                "todo": len(samples),
+                "resume_skipped": len(completed),
+            },
+            indent=2,
+        ),
+        flush=True,
+    )
     if not samples:
         return
 
@@ -242,10 +258,31 @@ def main() -> None:
             if len(buffer) >= 10:
                 append_jsonl(args.output, buffer)
                 buffer.clear()
-            if idx % 20 == 0 or idx == len(futures):
-                print(f"labeled {idx}/{len(futures)}")
+            if args.progress_every > 0 and (idx % args.progress_every == 0 or idx == len(futures)):
+                errors = sum(1 for item in buffer if item.get("teacher_error"))
+                print(
+                    json.dumps(
+                        {
+                            "stage": "teacher_label_progress",
+                            "labeled": idx,
+                            "total": len(futures),
+                            "buffer_errors": errors,
+                        }
+                    ),
+                    flush=True,
+                )
         if buffer:
             append_jsonl(args.output, buffer)
+    print(
+        json.dumps(
+            {
+                "stage": "teacher_label_done",
+                "output": str(args.output),
+                "total": len(futures),
+            }
+        ),
+        flush=True,
+    )
 
 
 if __name__ == "__main__":

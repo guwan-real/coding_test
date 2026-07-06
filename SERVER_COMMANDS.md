@@ -103,6 +103,27 @@ TEACHER_PROGRESS_EVERY=1 \
 bash /home/yuantao/futao/span_swepruner/scripts/prepare_swebench_repair_data.sh
 ```
 
+If GitHub clone fails with exit status 128, rerun with the default proxy-enabled clone path:
+
+```bash
+cd /home/yuantao/futao/span_swepruner
+
+SKIP_DOWNLOAD=1 \
+SWEBENCH_GIT_DIRECT=0 \
+MAX_SWEBENCH_SAMPLES=50 \
+MAX_REPAIR_SAMPLES=50 \
+TEACHER_BASE_URL=http://127.0.0.1:8015/v1 \
+TEACHER_MODEL=Qwen3.5-27B \
+TEACHER_WORKERS=2 \
+bash /home/yuantao/futao/span_swepruner/scripts/prepare_swebench_repair_data.sh
+```
+
+Failed repo clones are recorded at:
+
+```text
+data/swebench_repos/failed_repos.jsonl
+```
+
 Use the small run above first. If it reaches `stage 5/5` and `data/inspect_repair_labels.swebench.md` looks sane, scale it:
 
 ```bash

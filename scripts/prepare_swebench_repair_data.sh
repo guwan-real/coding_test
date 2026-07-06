@@ -18,6 +18,7 @@ SWEBENCH_JSONL="${SWEBENCH_JSONL:-${DATA_DIR}/swebench_train.jsonl}"
 SWEBENCH_REPO_ROOT="${SWEBENCH_REPO_ROOT:-${DATA_DIR}/swebench_repos}"
 SWEBENCH_HF_ENDPOINT="${SWEBENCH_HF_ENDPOINT:-official}"
 SWEBENCH_DISABLE_PROXY="${SWEBENCH_DISABLE_PROXY:-0}"
+SWEBENCH_GIT_DIRECT="${SWEBENCH_GIT_DIRECT:-0}"
 MAX_SWEBENCH_SAMPLES="${MAX_SWEBENCH_SAMPLES:-0}"
 MAX_REPOS="${MAX_REPOS:-0}"
 SKIP_DOWNLOAD="${SKIP_DOWNLOAD:-0}"
@@ -72,9 +73,15 @@ fi
 
 if [[ "${SKIP_REPO_CLONE}" != "1" ]]; then
   echo "[swebench-repair] stage 2/3: cloning/fetching SWE-bench repos"
+  GIT_DIRECT_ARGS=(--no-direct)
+  if [[ "${SWEBENCH_GIT_DIRECT}" == "1" ]]; then
+    GIT_DIRECT_ARGS=(--direct)
+  fi
   "${TRAIN_ENV}/bin/python" -u "${PROJECT_ROOT}/scripts/clone_swebench_repos.py" \
     --input "${SWEBENCH_JSONL}" \
     --repo-root "${SWEBENCH_REPO_ROOT}" \
+    "${GIT_DIRECT_ARGS[@]}" \
+    --continue-on-error \
     ${MAX_REPOS:+--max-repos "${MAX_REPOS}"}
 else
   echo "[swebench-repair] stage 2/3: using existing repo root: ${SWEBENCH_REPO_ROOT}"

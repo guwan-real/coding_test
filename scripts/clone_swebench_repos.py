@@ -23,8 +23,10 @@ def main() -> None:
     parser.add_argument("--input", required=True, type=Path)
     parser.add_argument("--repo-root", required=True, type=Path)
     parser.add_argument("--github-prefix", default="https://github.com")
-    parser.add_argument("--direct", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--direct", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--fetch", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--continue-on-error", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--failed-output", type=Path, default=None)
     parser.add_argument("--max-repos", type=int, default=0)
     args = parser.parse_args()
 
@@ -56,31 +58,58 @@ def main() -> None:
 
     cloned = 0
     skipped = 0
+    failed: list[dict[str, str]] = []
     for idx, repo in enumerate(repos, 1):
         dest = args.repo_root / repo_to_dirname(repo)
-        if (dest / ".git").exists():
-            skipped += 1
-            if args.fetch:
-                git_cmd = ["git"]
-                if args.direct:
-                    git_cmd += ["-c", "http.proxy=", "-c", "https.proxy="]
-                run(git_cmd + ["fetch", "--all", "--tags", "--prune"], cwd=dest)
-            print(json.dumps({"stage": "clone_swebench_repos_progress", "idx": idx, "repo": repo, "status": "exists"}), flush=True)
-            continue
-        url = f"{args.github_prefix.rstrip('/')}/{repo}.git"
-        git_cmd = ["git"]
-        if args.direct:
-            git_cmd += ["-c", "http.proxy=", "-c", "https.proxy="]
-        run(git_cmd + ["clone", url, str(dest)])
-        cloned += 1
-        print(json.dumps({"stage": "clone_swebench_repos_progress", "idx": idx, "repo": repo, "status": "cloned"}), flush=True)
+        try:
+            if (dest / ".git").exists():
+                skipped += 1
+                if args.fetch:
+                    git_cmd = ["git"]
+                    if args.direct:
+                        git_cmd += ["-c", "http.proxy=", "-c", "https.proxy="]
+                    run(git_cmd + ["fetch", "--all", "--tags", "--prune"], cwd=dest)
+                print(json.dumps({"stage": "clone_swebench_repos_progress", "idx": idx, "repo": repo, "status": "exists"}), flush=True)
+                continue
+            url = f"{args.github_prefix.rstrip('/')}/{repo}.git"
+            git_cmd = ["git"]
+            if args.direct:
+                git_cmd += ["-c", "http.proxy=", "-c", "https.proxy="]
+            run(git_cmd + ["clone", url, str(dest)])
+            cloned += 1
+            print(json.dumps({"stage": "clone_swebench_repos_progress", "idx": idx, "repo": repo, "status": "cloned"}), flush=True)
+        except subprocess.CalledProcessError as exc:
+            item = {"repo": repo, "dest": str(dest), "error": f"exit_status_{exc.returncode}"}
+            failed.append(item)
+            print(
+                json.dumps(
+                    {
+                        "stage": "clone_swebench_repos_progress",
+                        "idx": idx,
+                        "repo": repo,
+                        "status": "failed",
+                        "error": item["error"],
+                    }
+                ),
+                flush=True,
+            )
+            if not args.continue_on_error:
+                raise
 
+    failed_output = args.failed_output or (args.repo_root / "failed_repos.jsonl")
+    if failed:
+        failed_output.parent.mkdir(parents=True, exist_ok=True)
+        with failed_output.open("w", encoding="utf-8") as f:
+            for item in failed:
+                f.write(json.dumps(item, ensure_ascii=False) + "\n")
     print(
         json.dumps(
             {
                 "stage": "clone_swebench_repos_done",
                 "cloned": cloned,
                 "skipped_existing": skipped,
+                "failed": len(failed),
+                "failed_output": str(failed_output) if failed else None,
                 "repo_root": str(args.repo_root),
             },
             indent=2,

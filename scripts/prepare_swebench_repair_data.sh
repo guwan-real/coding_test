@@ -16,6 +16,8 @@ SWEBENCH_DATASET="${SWEBENCH_DATASET:-SWE-bench/SWE-bench}"
 SWEBENCH_SPLIT="${SWEBENCH_SPLIT:-train}"
 SWEBENCH_JSONL="${SWEBENCH_JSONL:-${DATA_DIR}/swebench_train.jsonl}"
 SWEBENCH_REPO_ROOT="${SWEBENCH_REPO_ROOT:-${DATA_DIR}/swebench_repos}"
+SWEBENCH_HF_ENDPOINT="${SWEBENCH_HF_ENDPOINT:-official}"
+SWEBENCH_DISABLE_PROXY="${SWEBENCH_DISABLE_PROXY:-0}"
 MAX_SWEBENCH_SAMPLES="${MAX_SWEBENCH_SAMPLES:-0}"
 MAX_REPOS="${MAX_REPOS:-0}"
 SKIP_DOWNLOAD="${SKIP_DOWNLOAD:-0}"
@@ -40,12 +42,30 @@ fi
 
 if [[ "${SKIP_DOWNLOAD}" != "1" ]]; then
   echo "[swebench-repair] stage 1/3: downloading SWE-bench metadata"
-  env -u http_proxy -u https_proxy -u all_proxy -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY \
-    "${TRAIN_ENV}/bin/python" -u "${PROJECT_ROOT}/scripts/download_swebench_train.py" \
-      --dataset "${SWEBENCH_DATASET}" \
-      --split "${SWEBENCH_SPLIT}" \
-      --output "${SWEBENCH_JSONL}" \
-      ${MAX_SWEBENCH_SAMPLES:+--max-samples "${MAX_SWEBENCH_SAMPLES}"}
+  HF_ENV=(env)
+  case "${SWEBENCH_HF_ENDPOINT}" in
+    official|direct|"")
+      HF_ENV+=(-u HF_ENDPOINT -u HF_HUB_ENDPOINT)
+      ;;
+    mirror|hf-mirror)
+      HF_ENV+=(HF_ENDPOINT=https://hf-mirror.com)
+      ;;
+    http://*|https://*)
+      HF_ENV+=(HF_ENDPOINT="${SWEBENCH_HF_ENDPOINT}")
+      ;;
+    *)
+      echo "Unknown SWEBENCH_HF_ENDPOINT=${SWEBENCH_HF_ENDPOINT}; use official, mirror, or a URL." >&2
+      exit 1
+      ;;
+  esac
+  if [[ "${SWEBENCH_DISABLE_PROXY}" == "1" ]]; then
+    HF_ENV+=(-u http_proxy -u https_proxy -u all_proxy -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY)
+  fi
+  "${HF_ENV[@]}" "${TRAIN_ENV}/bin/python" -u "${PROJECT_ROOT}/scripts/download_swebench_train.py" \
+    --dataset "${SWEBENCH_DATASET}" \
+    --split "${SWEBENCH_SPLIT}" \
+    --output "${SWEBENCH_JSONL}" \
+    ${MAX_SWEBENCH_SAMPLES:+--max-samples "${MAX_SWEBENCH_SAMPLES}"}
 else
   echo "[swebench-repair] stage 1/3: using existing SWE-bench metadata: ${SWEBENCH_JSONL}"
 fi

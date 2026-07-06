@@ -88,6 +88,42 @@ PRUNER_PORT=8001 PRUNER_URL=http://127.0.0.1:8001/prune bash scripts/run_span_se
 
 This is the main research path. It builds `kept_frags = CORE repair lines + SUPPORT repair context` from SWE-bench gold patches or from the official SWE-Pruner data as a smoke/auxiliary source.
 
+One-command SWE-bench train setup and repair-aware labeling:
+
+```bash
+cd /home/yuantao/futao/span_swepruner
+
+MAX_SWEBENCH_SAMPLES=50 \
+MAX_REPAIR_SAMPLES=50 \
+TEACHER_BASE_URL=http://127.0.0.1:8015/v1 \
+TEACHER_MODEL=Qwen3.5-27B \
+TEACHER_WORKERS=2 \
+PROGRESS_EVERY=5 \
+TEACHER_PROGRESS_EVERY=1 \
+bash /home/yuantao/futao/span_swepruner/scripts/prepare_swebench_repair_data.sh
+```
+
+Use the small run above first. If it reaches `stage 5/5` and `data/inspect_repair_labels.swebench.md` looks sane, scale it:
+
+```bash
+cd /home/yuantao/futao/span_swepruner
+
+MAX_SWEBENCH_SAMPLES=500 \
+MAX_REPAIR_SAMPLES=500 \
+TEACHER_BASE_URL=http://127.0.0.1:8015/v1 \
+TEACHER_MODEL=Qwen3.5-27B \
+TEACHER_WORKERS=4 \
+PROGRESS_EVERY=50 \
+TEACHER_PROGRESS_EVERY=10 \
+bash /home/yuantao/futao/span_swepruner/scripts/prepare_swebench_repair_data.sh
+```
+
+For full train split, set both sample limits to `0`:
+
+```bash
+MAX_SWEBENCH_SAMPLES=0 MAX_REPAIR_SAMPLES=0 bash scripts/prepare_swebench_repair_data.sh
+```
+
 Required inputs for the SWE-bench path:
 
 ```text
